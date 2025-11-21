@@ -58,7 +58,18 @@ def make_hc_index(args):
             embed_in_ori=False,
         )
     else:
-        entities_df["embedding"] = entities_df["description_embedding"]
+        embedding_col = None
+        for candidate in ["description_embedding", "embedding"]:
+            if candidate in entities_df.columns:
+                embedding_col = candidate
+                break
+
+        if embedding_col is None:
+            raise KeyError(
+                "No embedding column found in entity data. Provide embeddings or set --entity_second_embedding true."
+            )
+
+        entities_df["embedding"] = entities_df[embedding_col]
         first_occurrences = final_relationships.drop_duplicates(
             subset="description", keep="first"
         )

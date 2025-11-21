@@ -97,23 +97,30 @@ def read_graph_nx(
         else:
             graph.add_edge(row["head_id"], row["tail_id"])
 
-    # process embedding
-    final_entities["description_embedding"] = final_entities[
-        "description_embedding"
-    ].apply(
-        lambda x: np.fromstring(x.strip("[]"), sep=",") if isinstance(x, str) else x
-    )
-    # add embedding to graph
-    for _, row in final_entities.iterrows():
-        # graph.nodes[row["name"]]["embedding"] = row["description_embedding"]
-        graph.nodes[row["human_readable_id"]]["embedding"] = row[
-            "description_embedding"
-        ]
+    # Resolve embedding column and normalize values (optional)
+    embedding_col = None
+    for candidate in ["description_embedding", "embedding"]:
+        if candidate in final_entities.columns:
+            embedding_col = candidate
+            break
 
-    print(f"Number of nodes: {graph.number_of_nodes()}")
-    print(f"Number of edges: {graph.number_of_edges()}")
-    ent_embedding_sample = final_entities.iloc[0]["description_embedding"]
-    print(f"embedding sample shape: {ent_embedding_sample.shape}")
+    if embedding_col is None:
+        log.warning(
+            "No embedding column found in entity data; continuing without node embeddings."
+        )
+    else:
+        final_entities[embedding_col] = final_entities[embedding_col].apply(
+            lambda x: np.fromstring(x.strip("[]"), sep=",") if isinstance(x, str) else x
+        )
+
+        # add embedding to graph
+        for _, row in final_entities.iterrows():
+            graph.nodes[row["human_readable_id"]]["embedding"] = row[embedding_col]
+
+        print(f"Number of nodes: {graph.number_of_nodes()}")
+        print(f"Number of edges: {graph.number_of_edges()}")
+        ent_embedding_sample = final_entities.iloc[0][embedding_col]
+        print(f"embedding sample shape: {ent_embedding_sample.shape}")
 
     return graph, final_entities, relationships
 

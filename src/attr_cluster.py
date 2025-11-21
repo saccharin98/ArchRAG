@@ -425,13 +425,23 @@ def attr_cluster(
 
         # 1. augment graph and compute weight
         if args.augment_graph is True:
-            # 计算余弦距离图
-            cos_graph = compute_distance(
-                graph,
-                x_percentile=args.wx_weight,
-                search_k=args.search_k,
-                m_du_sacle=args.m_du_scale,
+            has_embedding = any(
+                graph.nodes[n].get("embedding") is not None for n in graph.nodes
             )
+
+            if has_embedding:
+                # 计算余弦距离图
+                cos_graph = compute_distance(
+                    graph,
+                    x_percentile=args.wx_weight,
+                    search_k=args.search_k,
+                    m_du_sacle=args.m_du_scale,
+                )
+            else:
+                print(
+                    "No node embeddings found; skipping graph augmentation and using the original graph."
+                )
+                cos_graph = graph
         else:
             cos_graph = graph
 
