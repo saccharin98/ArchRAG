@@ -26,7 +26,7 @@ num_workers=10
 log_file="./index.log"
 python_file="src/index.py"
 
-export CUDA_VISIBLE_DEVICES=7
+export CUDA_VISIBLE_DEVICES=4
 
 nohup python -u $python_file --base_path $base_path --relationship_filename $relationship_filename \
     --entity_filename $entity_filename --output_dir $output_dir --wx_weight $wx_weight --m_du_scale $m_du_scale --max_level $max_level \
