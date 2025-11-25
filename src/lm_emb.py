@@ -142,14 +142,16 @@ def text_to_embedding_batch(
         # 如果是 DataParallel，访问内部的原始模型
         if hasattr(model.module, "bert_model"):
             embedding_dim = model.module.bert_model.config.hidden_size
-        else:
-            embedding_dim = 768  # 默认值
+        elif hasattr(model.module, "config") and hasattr(
+            model.module.config, "hidden_size"
+        ):
+            embedding_dim = model.module.config.hidden_size
     else:
         # 如果不是 DataParallel，直接检查模型
         if hasattr(model, "bert_model"):
             embedding_dim = model.bert_model.config.hidden_size
-        else:
-            embedding_dim = 768  # 默认值
+        elif hasattr(model, "config") and hasattr(model.config, "hidden_size"):
+            embedding_dim = model.config.hidden_size
 
     try:
         # Tokenize the texts
