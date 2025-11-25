@@ -46,6 +46,22 @@ def get_vector_hchnsw(community_df, entity_df):
     community_embeddings = np.vstack(community_df["embedding"].values)
     entity_embeddings = np.vstack(entity_df["embedding"].values)
 
+    # Ensure both embeddings have the same dimension by padding/truncating as needed
+    max_dim = max(community_embeddings.shape[1], entity_embeddings.shape[1])
+
+    def _align_dim(embeddings: np.ndarray, target_dim: int):
+        if embeddings.shape[1] == target_dim:
+            return embeddings
+        if embeddings.shape[1] > target_dim:
+            # Truncate extra dimensions
+            return embeddings[:, :target_dim]
+        # Pad with zeros when the embedding dimension is smaller
+        pad_width = target_dim - embeddings.shape[1]
+        return np.pad(embeddings, ((0, 0), (0, pad_width)), mode="constant")
+
+    community_embeddings = _align_dim(community_embeddings, max_dim)
+    entity_embeddings = _align_dim(entity_embeddings, max_dim)
+
     # Combine both embeddings into one array
     combined_embeddings = np.concatenate(
         (community_embeddings, entity_embeddings), axis=0
