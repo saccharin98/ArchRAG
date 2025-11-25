@@ -76,7 +76,10 @@ def make_hc_index(args):
         )
 
     final_community_df, final_entity_df = create_hchnsw_index(
-        community_df=community_df, entity_df=entities_df, save_path=args.output_dir
+        community_df=community_df,
+        entity_df=entities_df,
+        save_path=args.output_dir,
+        args=args,
     )
     print("finish compute HC HNSW")
 

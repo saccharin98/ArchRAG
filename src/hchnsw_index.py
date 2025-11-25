@@ -1,4 +1,5 @@
 from src.utils import create_arg_parser
+from src.community_report import reprot_embedding_batch
 import numpy as np
 import faiss
 import os
@@ -22,7 +23,7 @@ def read_index(index_dir: str, index_name: str):
     return index
 
 
-def get_vector_hchnsw(community_df, entity_df):
+def get_vector_hchnsw(community_df, entity_df, args=None):
     level_counts = community_df["level"].value_counts()
     print(level_counts)
 
@@ -46,6 +47,24 @@ def get_vector_hchnsw(community_df, entity_df):
     community_embeddings = np.vstack(community_df["embedding"].values)
     entity_embeddings = np.vstack(entity_df["embedding"].values)
 
+    if community_embeddings.shape[1] != entity_embeddings.shape[1]:
+        if args is None:
+            raise ValueError(
+                "Community and entity embeddings have different dimensions and no args provided to recompute community embeddings."
+            )
+
+        print(
+            "Embedding dimension mismatch detected. Recomputing community embeddings with the configured embedding model."
+        )
+
+        community_df = reprot_embedding_batch(
+            community_df, args, num_workers=args.embedding_num_workers
+        )
+        community_df["embedding"] = community_df["embedding"].apply(
+            lambda x: np.array(x) if isinstance(x, list) else x
+        )
+        community_embeddings = np.vstack(community_df["embedding"].values)
+
     # Combine both embeddings into one array
     combined_embeddings = np.concatenate(
         (community_embeddings, entity_embeddings), axis=0
@@ -67,10 +86,10 @@ def get_vector_hchnsw(community_df, entity_df):
     return combined_embeddings, combined_levels, community_df, entity_df
 
 
-def create_hchnsw_index(community_df, entity_df, save_path):
+def create_hchnsw_index(community_df, entity_df, save_path, args=None):
 
     embeddings, levels, community_df, entity_df = get_vector_hchnsw(
-        community_df, entity_df
+        community_df, entity_df, args
     )
 
     ML = int(max(levels))
@@ -111,4 +130,4 @@ if __name__ == "__main__":
     print(community_df.shape)
     print(community_df.columns)
     print(type(community_df["embedding"][0]))
-    create_hchnsw_index(community_df, entity_df, args.output_dir)
+    create_hchnsw_index(community_df, entity_df, args.output_dir, args=args)
