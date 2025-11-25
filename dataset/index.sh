@@ -28,7 +28,7 @@ python_file="src/index.py"
 
 export CUDA_VISIBLE_DEVICES=4
 
-export PYTHONPATH="/home/wangshu/rag/hier_graph_rag/:$PYTHONPATH"
+export PYTHONPATH=$(pwd):$PYTHONPATH
 
 
 nohup python -u $python_file --base_path $base_path --relationship_filename $relationship_filename \
