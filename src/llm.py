@@ -2,7 +2,7 @@ import logging
 from openai import OpenAI
 import time
 from src.utils import create_arg_parser
-
+from src.utils import create_arg_parser, num_tokens
 
 log = logging.getLogger(__name__)
 
@@ -22,6 +22,9 @@ def llm_invoker(
 
     engine = args.engine
     client = OpenAI(api_key=api_key, base_url=base_url)
+    print(base_url)
+    input_token = num_tokens(input_text)
+    print(input_token)
     # messages = [
     #     {
     #         "role": "system",
@@ -36,7 +39,7 @@ def llm_invoker(
         "model": engine,
         "messages": messages,
         "temperature": temperature,
-        "max_tokens": max_tokens,
+        "max_tokens": 2000,
         "frequency_penalty": 0,
         "presence_penalty": 0,
     }
@@ -66,6 +69,7 @@ def llm_invoker(
         except Exception as e:
             retries += 1
             print(f"OpenAI error, retrying... ({retries}/{max_retries})")
+            print(f"Error details: {e}")
             time.sleep(2)
 
     if not success:

@@ -7,15 +7,300 @@ import pandas as pd
 import tqdm
 import cupy as cp
 import scipy.sparse as sp
-from graspologic.partition import hierarchical_leiden, leiden
 from sklearn.cluster import SpectralClustering
 from scipy.sparse import csr_matrix
 from sklearn.cluster import KMeans
 from cupy.sparse.linalg import eigsh
+from collections import defaultdict
+import random
 
 
 from src.utils import *
 from src.community_report import community_report_batch
+
+
+class ManualLeiden:
+    """手动实现的 Leiden 算法"""
+    
+    def __init__(self, graph: nx.Graph, is_weighted: bool = True, random_seed: int = 0xDEADBEEF):
+        self.graph = graph
+        self.is_weighted = is_weighted
+        self.random_seed = random_seed
+        random.seed(random_seed)
+        np.random.seed(random_seed)
+        
+        # 初始化每个节点为独立的社区
+        self.node_to_community = {node: i for i, node in enumerate(graph.nodes())}
+        self.community_to_nodes = {i: [node] for i, node in enumerate(graph.nodes())}
+        
+    def _modularity_gain(self, node, target_community):
+        """计算将节点移动到目标社区的模块度增益"""
+        if self.is_weighted:
+            # 计算节点到目标社区的边权重之和
+            edge_weight_to_community = 0
+            for neighbor in self.graph.neighbors(node):
+                if self.node_to_community[neighbor] == target_community:
+                    edge_weight_to_community += self.graph[node][neighbor].get('weight', 1)
+            
+            # 计算节点的总度数
+            node_degree = sum(self.graph[node][neighbor].get('weight', 1) 
+                            for neighbor in self.graph.neighbors(node))
+            
+            # 计算目标社区的总度数
+            community_degree = sum(
+                sum(self.graph[n][neighbor].get('weight', 1) for neighbor in self.graph.neighbors(n))
+                for n in self.community_to_nodes[target_community]
+            )
+            
+            # 总边权重
+            total_weight = sum(data.get('weight', 1) for _, _, data in self.graph.edges(data=True))
+            
+        else:
+            # 无权图的情况
+            edge_weight_to_community = sum(
+                1 for neighbor in self.graph.neighbors(node)
+                if self.node_to_community[neighbor] == target_community
+            )
+            
+            node_degree = self.graph.degree(node)
+            community_degree = sum(
+                self.graph.degree(n) for n in self.community_to_nodes[target_community]
+            )
+            total_weight = self.graph.number_of_edges()
+        
+        if total_weight == 0:
+            return 0
+        
+        # 模块度增益计算
+        gain = edge_weight_to_community - (node_degree * community_degree) / (2 * total_weight)
+        return gain
+    
+    def _move_nodes_phase(self):
+        """第一阶段：移动节点到最优社区"""
+        improvement = False
+        nodes = list(self.graph.nodes())
+        random.shuffle(nodes)
+        
+        for node in nodes:
+            current_community = self.node_to_community[node]
+            
+            # 找到邻居所在的社区
+            neighbor_communities = set()
+            for neighbor in self.graph.neighbors(node):
+                neighbor_communities.add(self.node_to_community[neighbor])
+            
+            # 计算移动到每个邻居社区的增益
+            best_community = current_community
+            best_gain = 0
+            
+            for community in neighbor_communities:
+                if community == current_community:
+                    continue
+                    
+                gain = self._modularity_gain(node, community)
+                if gain > best_gain:
+                    best_gain = gain
+                    best_community = community
+            
+            # 如果找到更好的社区，移动节点
+            if best_community != current_community:
+                improvement = True
+                self.community_to_nodes[current_community].remove(node)
+                if not self.community_to_nodes[current_community]:
+                    del self.community_to_nodes[current_community]
+                
+                if best_community not in self.community_to_nodes:
+                    self.community_to_nodes[best_community] = []
+                self.community_to_nodes[best_community].append(node)
+                self.node_to_community[node] = best_community
+        
+        return improvement
+    
+    def _refine_partition(self):
+        """第二阶段：细化分区"""
+        new_community_id = max(self.community_to_nodes.keys()) + 1 if self.community_to_nodes else 0
+        
+        for community_id in list(self.community_to_nodes.keys()):
+            nodes = self.community_to_nodes[community_id]
+            if len(nodes) <= 1:
+                continue
+            
+            # 为社区内的节点创建子图
+            subgraph = self.graph.subgraph(nodes)
+            
+            # 在子图中再次运行移动节点阶段
+            sub_node_to_community = {node: community_id for node in nodes}
+            
+            nodes_shuffled = list(nodes)
+            random.shuffle(nodes_shuffled)
+            
+            for node in nodes_shuffled:
+                neighbor_communities = set()
+                for neighbor in subgraph.neighbors(node):
+                    neighbor_communities.add(sub_node_to_community[neighbor])
+                
+                best_community = sub_node_to_community[node]
+                best_gain = 0
+                
+                for target_comm in neighbor_communities:
+                    if target_comm == sub_node_to_community[node]:
+                        continue
+                    
+                    gain = self._modularity_gain(node, target_comm)
+                    if gain > best_gain:
+                        best_gain = gain
+                        best_community = target_comm
+                
+                # 如果节点需要分离到新社区
+                if best_community != community_id and best_gain > 0:
+                    if best_community not in self.community_to_nodes:
+                        self.community_to_nodes[new_community_id] = []
+                        self.community_to_nodes[new_community_id].append(node)
+                        self.node_to_community[node] = new_community_id
+                        sub_node_to_community[node] = new_community_id
+                        new_community_id += 1
+                    else:
+                        self.community_to_nodes[best_community].append(node)
+                        self.node_to_community[node] = best_community
+                        sub_node_to_community[node] = best_community
+                    
+                    self.community_to_nodes[community_id].remove(node)
+    
+    def _aggregate_graph(self):
+        """第三阶段：聚合图"""
+        new_graph = nx.Graph()
+        
+        # 为每个社区创建一个新节点
+        for community_id in self.community_to_nodes.keys():
+            new_graph.add_node(community_id)
+        
+        # 创建社区间的边
+        edge_weights = defaultdict(float)
+        
+        for u, v, data in self.graph.edges(data=True):
+            comm_u = self.node_to_community[u]
+            comm_v = self.node_to_community[v]
+            
+            if comm_u != comm_v:
+                edge_key = tuple(sorted([comm_u, comm_v]))
+                weight = data.get('weight', 1) if self.is_weighted else 1
+                edge_weights[edge_key] += weight
+        
+        for (comm_u, comm_v), weight in edge_weights.items():
+            new_graph.add_edge(comm_u, comm_v, weight=weight)
+        
+        return new_graph
+    
+    def run(self, max_iterations: int = 100):
+        """运行 Leiden 算法"""
+        for iteration in range(max_iterations):
+            # 第一阶段:移动节点
+            improved = self._move_nodes_phase()
+            
+            if not improved:
+                break
+            
+            # 第二阶段:细化分区
+            self._refine_partition()
+            
+            # 第三阶段:聚合图(为下一次迭代准备)
+            if iteration < max_iterations - 1:
+                self.graph = self._aggregate_graph()
+                
+                # 重新初始化节点到社区的映射
+                # 聚合后的图中,每个节点就是一个社区ID
+                self.node_to_community = {node: node for node in self.graph.nodes()}
+                self.community_to_nodes = {node: [node] for node in self.graph.nodes()}
+        
+        return self.node_to_community
+
+
+class ManualHierarchicalLeiden:
+    """手动实现的分层 Leiden 算法"""
+    
+    def __init__(self, graph: nx.Graph, max_cluster_size: int, is_weighted: bool = True, 
+                 random_seed: int = 0xDEADBEEF):
+        self.graph = graph
+        self.max_cluster_size = max_cluster_size
+        self.is_weighted = is_weighted
+        self.random_seed = random_seed
+        self.partitions = []
+        
+    def run(self):
+        """运行分层 Leiden 算法"""
+        current_graph = self.graph.copy()
+        # 使用字典映射当前图节点到原始图节点
+        current_to_original = {node: [node] for node in self.graph.nodes()}
+        level = 0
+        parent_mapping = {node: None for node in self.graph.nodes()}
+        
+        while True:
+            # 运行 Leiden 算法
+            leiden = ManualLeiden(current_graph, self.is_weighted, self.random_seed)
+            node_to_community = leiden.run()
+            
+            # 检查是否所有社区都满足大小限制
+            community_to_nodes = defaultdict(list)
+            for node, community in node_to_community.items():
+                # 获取原始节点
+                original_nodes = current_to_original[node]
+                community_to_nodes[community].extend(original_nodes)
+            
+            all_clusters_valid = all(
+                len(nodes) <= self.max_cluster_size 
+                for nodes in community_to_nodes.values()
+            )
+            
+            # 记录当前层级的分区
+            for community_id, nodes in community_to_nodes.items():
+                for node in nodes:
+                    cluster_id = f"{level}_{community_id}"
+                    partition = {
+                        'node': node,
+                        'cluster': cluster_id,
+                        'level': level,
+                        'parent_cluster': parent_mapping.get(node),
+                        'is_final_cluster': all_clusters_valid
+                    }
+                    self.partitions.append(partition)
+            
+            # 如果所有社区都满足大小限制，停止
+            if all_clusters_valid:
+                break
+            
+            # 否则，为需要进一步分割的社区创建新层级
+            new_graph = nx.Graph()
+            new_to_original = {}  # 映射新图节点到原始节点
+            new_parent_mapping = {}
+            
+            for community_id, nodes in community_to_nodes.items():
+                if len(nodes) > self.max_cluster_size:
+                    # 创建子图（使用原始节点）
+                    subgraph = self.graph.subgraph(nodes)
+                    
+                    # 为子图中的每个节点创建映射
+                    for node in subgraph.nodes():
+                        new_graph.add_node(node)
+                        new_to_original[node] = [node]  # 保持原始节点
+                        new_parent_mapping[node] = f"{level}_{community_id}"
+                    
+                    # 添加边
+                    for u, v, data in subgraph.edges(data=True):
+                        new_graph.add_edge(u, v, **data)
+            
+            if new_graph.number_of_nodes() == 0:
+                break
+            
+            current_graph = new_graph
+            current_to_original = new_to_original  # 更新映射
+            parent_mapping = new_parent_mapping
+            level += 1
+            
+            # 防止无限循环
+            if level > 10:
+                break
+        
+        return self.partitions
 
 
 def attribute_hierarchical_clustering(
@@ -91,41 +376,38 @@ def calculate_community_levels(hier_tree):
 def compute_leiden_communities(
     graph: nx.Graph | nx.DiGraph, max_cluster_size: int, seed=0xDEADBEEF
 ):
-    community_mapping = hierarchical_leiden(
-        graph, max_cluster_size=max_cluster_size, random_seed=seed, is_weighted=True
+    """使用手动实现的分层 Leiden 算法"""
+    hierarchical_leiden = ManualHierarchicalLeiden(
+        graph, max_cluster_size=max_cluster_size, is_weighted=True, random_seed=seed
     )
+    community_mapping = hierarchical_leiden.run()
+    
     community_info: dict[str, dict] = {}
 
     for partition in community_mapping:
-        commuinity_id = str(partition.cluster)
-        if commuinity_id not in community_info:
-            community_info[commuinity_id] = {
-                "level": partition.level,
+        community_id = str(partition['cluster'])
+        if community_id not in community_info:
+            community_info[community_id] = {
+                "level": partition['level'],
                 "nodes": [],
-                "is_final_cluster": partition.is_final_cluster,
-                "parent_cluster": partition.parent_cluster,
+                "is_final_cluster": partition['is_final_cluster'],
+                "parent_cluster": partition['parent_cluster'],
             }
-        community_info[commuinity_id]["nodes"].append(partition.node)
+        community_info[community_id]["nodes"].append(partition['node'])
+    
     return community_info, community_mapping
 
 
-# attr cluster method 2:
-# each time, we first compute the leiden community for the given cos graph
-# then, we get the community report and the corresponding embedding
-# finally, we reconstruct the graph with the community information
-# and use this graph for the next level community computation
 def compute_leiden(
     graph: nx.Graph, seed=0xDEADBEEF, weighted=True
 ) -> dict[str, list[int]]:
-    # 使用 leiden 算法计算一层
-    community_mapping = leiden(
-        graph,
-        is_weighted=weighted,
-        random_seed=seed,
-    )
+    """使用手动实现的 Leiden 算法计算一层"""
+    leiden = ManualLeiden(graph, is_weighted=weighted, random_seed=seed)
+    node_to_community = leiden.run()
+    
     c_n_mapping: dict[str, list[int]] = {}
 
-    for node, community in community_mapping.items():
+    for node, community in node_to_community.items():
         community_id = str(community)
         if community_id not in c_n_mapping:
             c_n_mapping[community_id] = []
@@ -137,18 +419,21 @@ def compute_leiden(
 def compute_leiden_max_size(
     graph: nx.Graph, max_cluster_size: int, seed=0xDEADBEEF, weighted=True
 ):
-    community_mapping = hierarchical_leiden(
-        graph, max_cluster_size=max_cluster_size, random_seed=seed, is_weighted=weighted
+    """使用手动实现的分层 Leiden 算法，限制最大社区大小"""
+    hierarchical_leiden = ManualHierarchicalLeiden(
+        graph, max_cluster_size=max_cluster_size, is_weighted=weighted, random_seed=seed
     )
+    community_mapping = hierarchical_leiden.run()
+    
     c_n_mapping: dict[str, list[int]] = {}
 
     for partition in community_mapping:
-        if not partition.is_final_cluster:
+        if not partition['is_final_cluster']:
             continue
-        community_id = str(partition.cluster)
+        community_id = str(partition['cluster'])
         if community_id not in c_n_mapping:
             c_n_mapping[community_id] = []
-        c_n_mapping[community_id].append(partition.node)
+        c_n_mapping[community_id].append(partition['node'])
 
     return c_n_mapping
 
@@ -457,12 +742,6 @@ def attr_cluster(
                     cos_graph, args.seed, num_c, False
                 )
 
-        # # 使用 Leiden 算法进行聚类
-        # if args.max_cluster_size != 0:
-
-        # else:
-        #     c_n_mapping = compute_leiden(cos_graph, args.seed)
-
         # check for finish
         number_of_clusters = len(c_n_mapping)
         if number_of_clusters < min_clusters:
@@ -505,6 +784,14 @@ def attr_cluster(
             new_community_df["community_nodes"] = new_community_df[
                 "community_nodes"
             ].apply(lambda x: ast.literal_eval(x) if isinstance(x, str) else x)
+            
+            # 确保 level 列存在
+            if "level" not in new_community_df.columns:
+                # 从 community_id 中提取 level 或使用 level_dict
+                if new_community_df["community_id"].iloc[0] in level_dict:
+                    new_community_df["level"] = new_community_df["community_id"].map(level_dict)
+                else:
+                    new_community_df["level"] = level
         else:
             print("Generating new community report.")
             new_community_df, cur_token = community_report_batch(
@@ -519,6 +806,10 @@ def attr_cluster(
             )
             all_token += cur_token
             print(f"cur token usage for current level: {cur_token}")
+            
+            # 确保生成的 DataFrame 包含 level 列
+            if "level" not in new_community_df.columns:
+                new_community_df["level"] = new_community_df["community_id"].map(level_dict)
 
         # update
         graph, new_community_df = reconstruct_graph(
@@ -550,11 +841,3 @@ if __name__ == "__main__":
     community_df.to_csv(output_path, index=False)
     print(f"Community report saved to {output_path}")
     print(f"Total token usage: {all_token}")
-
-    # results_by_level = attribute_hierarchical_clustering(cos_graph, final_entities)
-
-    # for level, communities in results_by_level.items():
-    #     print(f"Create community report for level: {level} ")
-    #     print(f"Number of communities in this level: {len(communities)}")
-    #     for community_id, node_list in communities.items():
-    #         print(f"Community {community_id}:")
