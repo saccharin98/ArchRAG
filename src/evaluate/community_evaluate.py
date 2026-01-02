@@ -65,8 +65,8 @@ if __name__ == "__main__":
     args, _ = parser.parse_known_args()
     args.max_cluster_size = 5
     print(args)
-
-    graph, final_entities, final_relationships = read_graph_nx(args.base_path)
+    
+    graph, final_entities, final_relationships = read_graph_nx("index")
 
     # weighted = args.weighted = False
     level = 1

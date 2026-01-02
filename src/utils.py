@@ -211,6 +211,7 @@ def compute_distance(
     # Step 1: Compute the initial graph with cosine similarity as weights.
     all_weights = []
     for n1 in graph.nodes():
+        print(graph.nodes[n1])
         n1_emb = graph.nodes[n1]["embedding"]
         for neighbor in graph.neighbors(n1):
             if not res_graph.has_edge(n1, neighbor):
