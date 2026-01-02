@@ -52,7 +52,14 @@ def read_graph_nx(
     relationship_filename: str = "create_final_relationships.parquet",
     entity_filename: str = "create_final_entities.parquet",
 ) -> nx.Graph:
-    """Read graph from file."""
+    """Read graph from file.
+
+    Note:
+        If the entity file contains a column named ``graph_embedding`` (the name
+        produced by the upstream graph construction pipeline), the embeddings
+        will be attached to the NetworkX nodes under the ``embedding`` key so
+        downstream code that expects ``embedding`` continues to work.
+    """
     data_path = Path(file_path)
 
     # Determine the file extension
@@ -98,6 +105,14 @@ def read_graph_nx(
             graph.add_edge(row["head_id"], row["tail_id"])
 
     # process embedding
+
+    # If the entity file already contains embeddings (graph_embedding), attach
+    # them to the nodes for downstream algorithms such as compute_distance.
+    if "graph_embedding" in final_entities.columns:
+        for _, row in final_entities.iterrows():
+            graph.nodes[row["human_readable_id"]]["embedding"] = row[
+                "graph_embedding"
+            ]
 
     print(f"Number of nodes: {graph.number_of_nodes()}")
     print(f"Number of edges: {graph.number_of_edges()}")
