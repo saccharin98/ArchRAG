@@ -1211,11 +1211,10 @@ if __name__ == "__main__":
     parser = create_arg_parser()
     args = parser.parse_args()
     
-    # 添加KL优化相关参数（如果不存在）
     if not hasattr(args, 'kl_gamma'):
-        args.kl_gamma = 0.5  # KL散度权重系数，可调整
+        args.kl_gamma = 0.5  
     if not hasattr(args, 'kl_iterations'):
-        args.kl_iterations = 10  # KL优化最大迭代次数
+        args.kl_iterations = 10  
     
     print_args(args)
 
