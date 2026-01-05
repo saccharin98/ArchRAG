@@ -50,7 +50,7 @@ def clean_dataframe(df):
 def read_graph_nx(
     file_path: str,
     relationship_filename: str = "create_final_relationships.parquet",
-    entity_filename: str = "create_final_entities.parquet",
+    entity_filename: str = "embeded_entities.parquet",
 ) -> nx.Graph:
     """Read graph from file."""
     data_path = Path(file_path)
@@ -740,7 +740,7 @@ def create_inference_arg_parser():
         "--base_path",
         type=str,
         # required=True,
-        default="/mnt/data/wangshu/hcarag/HotpotQA/hcarag",
+        default="index",
         # default="/mnt/data/wangshu/hcarag/MultiHop-RAG/hcarag",
         help="Base path to the directory containing the graph data.",
     )
@@ -755,7 +755,7 @@ def create_inference_arg_parser():
     parser.add_argument(
         "--entity_filename",
         type=str,
-        default="create_final_entities.parquet",
+        default="embeded_entities.parquet",
         help="Filename for the entity data.",
     )
 

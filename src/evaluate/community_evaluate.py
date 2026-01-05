@@ -66,7 +66,7 @@ if __name__ == "__main__":
     args.max_cluster_size = 5
     print(args)
     
-    graph, final_entities, final_relationships = read_graph_nx("index")
+    graph, final_entities, final_relationships = read_graph_nx("index", entity_filename="embeded_entities.parquet")
 
     # weighted = args.weighted = False
     level = 1
